@@ -61,7 +61,7 @@ export default class JsonRpcHandler {
     const subscriptions: string[] = [];
     let isClosed = false;
 
-    const listener = (payload: { subscription: string; result: any }) => {
+    const listener = async (payload: { subscription: string; result: any }) => {
       // Don't attempt to send a message to the websocket if we already know it is closed,
       // or the current websocket connection isn't interested in the particular subscription.
       if (isClosed || subscriptions.includes(payload.subscription)) {
@@ -77,7 +77,7 @@ export default class JsonRpcHandler {
           })
         );
       } catch (error) {
-        _handleError(error);
+        await _handleError(error);
       }
     };
 
@@ -89,7 +89,7 @@ export default class JsonRpcHandler {
       let rpcResp: JsonRpcResponse | undefined;
 
       try {
-        rpcReq = await _readWsRequest(msg as string);
+        rpcReq = _readWsRequest(msg as string);
 
         rpcResp = await this._handleRequest(rpcReq);
 
@@ -156,10 +156,12 @@ const _readHttpRequest = async (
 
     json = JSON.parse(text);
   } catch (error) {
+    // tslint:disable-next-line only-buidler-error
     throw new InvalidJsonInputError(`Parse error: ${error.message}`);
   }
 
   if (!isValidJsonRequest(json)) {
+    // tslint:disable-next-line only-buidler-error
     throw new InvalidRequestError("Invalid request");
   }
 
@@ -171,10 +173,12 @@ const _readWsRequest = (msg: string): JsonRpcRequest => {
   try {
     json = JSON.parse(msg);
   } catch (error) {
+    // tslint:disable-next-line only-buidler-error
     throw new InvalidJsonInputError(`Parse error: ${error.message}`);
   }
 
   if (!isValidJsonRequest(json)) {
+    // tslint:disable-next-line only-buidler-error
     throw new InvalidRequestError("Invalid request");
   }
 
