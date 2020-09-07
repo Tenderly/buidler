@@ -269,10 +269,10 @@ export class EthModule {
     rpcCall: RpcCallRequest,
     blockTag: OptionalBlockTag
   ): Promise<string> {
-    this._validateBlockTag(blockTag);
+    const stateRoot = await this._blockTagToStateRoot(blockTag);
 
     const callParams = await this._rpcCallRequestToNodeCallParams(rpcCall);
-    const returnData = await this._node.runCall(callParams);
+    const returnData = await this._node.runCall(callParams, stateRoot);
 
     return bufferToRpcData(returnData);
   }
@@ -315,13 +315,15 @@ export class EthModule {
     transactionRequest: RpcTransactionRequest,
     blockTag: OptionalBlockTag
   ): Promise<string> {
-    this._validateBlockTag(blockTag);
+    const stateRoot = await this._blockTagToStateRoot(blockTag);
 
     const txParams = await this._rpcTransactionRequestToNodeTransactionParams(
       transactionRequest
     );
 
-    return numberToRpcQuantity(await this._node.estimateGas(txParams));
+    return numberToRpcQuantity(
+      await this._node.estimateGas(txParams, stateRoot)
+    );
   }
 
   // eth_gasPrice
@@ -344,9 +346,11 @@ export class EthModule {
     address: Buffer,
     blockTag: OptionalBlockTag
   ): Promise<string> {
-    this._validateBlockTag(blockTag);
+    const stateRoot = await this._blockTagToStateRoot(blockTag);
 
-    return numberToRpcQuantity(await this._node.getAccountBalance(address));
+    return numberToRpcQuantity(
+      await this._node.getAccountBalance(address, stateRoot)
+    );
   }
 
   // eth_getBlockByHash
@@ -449,9 +453,9 @@ export class EthModule {
     address: Buffer,
     blockTag: OptionalBlockTag
   ): Promise<string> {
-    this._validateBlockTag(blockTag);
+    const stateRoot = await this._blockTagToStateRoot(blockTag);
 
-    return bufferToRpcData(await this._node.getCode(address));
+    return bufferToRpcData(await this._node.getCode(address, stateRoot));
   }
 
   // eth_getCompilers
@@ -498,9 +502,9 @@ export class EthModule {
     slot: BN,
     blockTag: OptionalBlockTag
   ): Promise<string> {
-    this._validateBlockTag(blockTag);
+    const stateRoot = await this._blockTagToStateRoot(blockTag);
 
-    const data = await this._node.getStorageAt(address, slot);
+    const data = await this._node.getStorageAt(address, slot, stateRoot);
 
     // data should always be 32 bytes, but we are imitating Ganache here.
     // Please read the comment in `getStorageAt`.
@@ -602,9 +606,11 @@ export class EthModule {
     address: Buffer,
     blockTag: OptionalBlockTag
   ): Promise<string> {
-    this._validateBlockTag(blockTag);
+    const stateRoot = await this._blockTagToStateRoot(blockTag);
 
-    return numberToRpcQuantity(await this._node.getAccountNonce(address));
+    return numberToRpcQuantity(
+      await this._node.getAccountNonce(address, stateRoot)
+    );
   }
 
   // eth_getTransactionReceipt
@@ -837,22 +843,31 @@ export class EthModule {
       nonce:
         rpcTx.nonce !== undefined
           ? rpcTx.nonce
-          : await this._node.getAccountNonce(rpcTx.from)
+          : await this._node.getAccountNonce(rpcTx.from, null)
     };
   }
 
-  private _validateBlockTag(blockTag: OptionalBlockTag) {
-    // We only support latest and pending. As this provider doesn't have pending transactions, its
-    // actually just latest.
+  private async _blockTagToStateRoot(
+    blockTag: OptionalBlockTag
+  ): Promise<Buffer> {
+    let block: Block;
+
     if (
-      blockTag !== undefined &&
-      blockTag !== "latest" &&
-      blockTag !== "pending"
+      blockTag === undefined ||
+      blockTag === "latest" ||
+      blockTag === "pending"
     ) {
-      throw new InvalidInputError(
-        "Only latest and pending block params are supported"
-      );
+      block = await this._node.getLatestBlock();
+    } else {
+      let blockNumber: number = 0;
+      if (blockTag !== "earliest") {
+        blockNumber = blockTag.toNumber();
+      }
+
+      block = await this._node.getBlockByNumber(new BN(blockNumber));
     }
+
+    return block.header.stateRoot;
   }
 
   private async _getDefaultCallFrom(): Promise<Buffer> {

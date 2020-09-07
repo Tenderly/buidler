@@ -399,40 +399,75 @@ export class BuidlerNode {
     }
   }
 
-  public async runCall(call: CallParams): Promise<Buffer> {
-    const tx = await this._getFakeTransaction({
-      ...call,
-      nonce: await this.getAccountNonce(call.from)
-    });
+  public async runCall(call: CallParams, stateRoot: Buffer): Promise<Buffer> {
+    const currentStateRoot = await this._stateManager.getStateRoot();
+    await this._stateManager.setStateRoot(stateRoot);
 
-    const result = await this._runTxAndRevertMutations(tx, false, false);
+    try {
+      const tx = await this._getFakeTransaction({
+        ...call,
+        nonce: await this.getAccountNonce(call.from, null)
+      });
 
-    const error = !this._throwOnCallFailures
-      ? undefined
-      : await this._manageErrors(result.execResult);
+      const result = await this._runTxAndRevertMutations(tx, false, false);
 
-    if (error !== undefined) {
-      throw error;
+      const error = !this._throwOnCallFailures
+        ? undefined
+        : await this._manageErrors(result.execResult);
+
+      if (error !== undefined) {
+        throw error;
+      }
+
+      if (
+        result.execResult.exceptionError === undefined ||
+        result.execResult.exceptionError.error === ERROR.REVERT
+      ) {
+        return result.execResult.returnValue;
+      }
+
+      // If we got here we found another kind of error and we throw anyway
+      throw this._manageErrors(result.execResult)!;
+    } finally {
+      await this._stateManager.setStateRoot(currentStateRoot);
     }
-
-    if (
-      result.execResult.exceptionError === undefined ||
-      result.execResult.exceptionError.error === ERROR.REVERT
-    ) {
-      return result.execResult.returnValue;
-    }
-
-    // If we got here we found another kind of error and we throw anyway
-    throw this._manageErrors(result.execResult)!;
   }
 
-  public async getAccountBalance(address: Buffer): Promise<BN> {
-    const account = await this._stateManager.getAccount(address);
+  public async getAccountBalance(
+    address: Buffer,
+    stateRoot: Buffer
+  ): Promise<BN> {
+    const currentStateRoot = await this._stateManager.getStateRoot();
+    await this._stateManager.setStateRoot(stateRoot);
+
+    let account: Account;
+    try {
+      account = await this._stateManager.getAccount(address);
+    } finally {
+      await this._stateManager.setStateRoot(currentStateRoot);
+    }
+
     return new BN(account.balance);
   }
 
-  public async getAccountNonce(address: Buffer): Promise<BN> {
-    const account = await this._stateManager.getAccount(address);
+  public async getAccountNonce(
+    address: Buffer,
+    stateRoot: Buffer | null
+  ): Promise<BN> {
+    const currentStateRoot = await this._stateManager.getStateRoot();
+    if (stateRoot === null) {
+      stateRoot = currentStateRoot;
+    }
+
+    await this._stateManager.setStateRoot(stateRoot);
+
+    let account: Account;
+    try {
+      account = await this._stateManager.getAccount(address);
+    } finally {
+      await this._stateManager.setStateRoot(currentStateRoot);
+    }
+
     return new BN(account.nonce);
   }
 
@@ -448,23 +483,36 @@ export class BuidlerNode {
     return this._blockGasLimit;
   }
 
-  public async estimateGas(txParams: TransactionParams): Promise<BN> {
-    const tx = await this._getFakeTransaction({
-      ...txParams,
-      gasLimit: await this.getBlockGasLimit()
-    });
-
-    const result = await this._runTxAndRevertMutations(tx, true, true);
-
-    // This is only considered if the call to _runTxAndRevertMutations doesn't
-    // manage errors
-    if (result.execResult.exceptionError !== undefined) {
-      return this.getBlockGasLimit();
+  public async estimateGas(
+    txParams: TransactionParams,
+    stateRoot: Buffer | null
+  ): Promise<BN> {
+    const currentStateRoot = await this._stateManager.getStateRoot();
+    if (stateRoot === null) {
+      stateRoot = currentStateRoot;
     }
+    await this._stateManager.setStateRoot(stateRoot);
 
-    const initialEstimation = result.gasUsed;
+    try {
+      const tx = await this._getFakeTransaction({
+        ...txParams,
+        gasLimit: await this.getBlockGasLimit()
+      });
 
-    return this._correctInitialEstimation(txParams, initialEstimation);
+      const result = await this._runTxAndRevertMutations(tx, true, true);
+
+      // This is only considered if the call to _runTxAndRevertMutations doesn't
+      // manage errors
+      if (result.execResult.exceptionError !== undefined) {
+        return this.getBlockGasLimit();
+      }
+
+      const initialEstimation = result.gasUsed;
+
+      return this._correctInitialEstimation(txParams, initialEstimation);
+    } finally {
+      await this._stateManager.setStateRoot(currentStateRoot);
+    }
   }
 
   public async getGasPrice(): Promise<BN> {
@@ -475,9 +523,22 @@ export class BuidlerNode {
     return COINBASE_ADDRESS;
   }
 
-  public async getStorageAt(address: Buffer, slot: BN): Promise<Buffer> {
+  public async getStorageAt(
+    address: Buffer,
+    slot: BN,
+    stateRoot: Buffer
+  ): Promise<Buffer> {
     const key = slot.toArrayLike(Buffer, "be", 32);
-    const data = await this._stateManager.getContractStorage(address, key);
+
+    const currentStateRoot = await this._stateManager.getStateRoot();
+    await this._stateManager.setStateRoot(stateRoot);
+
+    let data: Promise<Buffer>;
+    try {
+      data = await this._stateManager.getContractStorage(address, key);
+    } finally {
+      await this._stateManager.setStateRoot(currentStateRoot);
+    }
 
     // TODO: The state manager returns the data as it was saved, it doesn't
     //  pad it. Technically, the storage consists of 32-byte slots, so we should
@@ -534,8 +595,18 @@ export class BuidlerNode {
     return this._computeTotalDifficulty(block);
   }
 
-  public async getCode(address: Buffer): Promise<Buffer> {
-    return this._stateManager.getContractCode(address);
+  public async getCode(address: Buffer, stateRoot: Buffer): Promise<Buffer> {
+    const currentStateRoot = await this._stateManager.getStateRoot();
+    await this._stateManager.setStateRoot(stateRoot);
+
+    let code: Promise<Buffer>;
+    try {
+      code = this._stateManager.getContractCode(address);
+    } finally {
+      await this._stateManager.setStateRoot(currentStateRoot);
+    }
+
+    return code;
   }
 
   public async increaseTime(increment: BN) {
@@ -980,7 +1051,10 @@ export class BuidlerNode {
       );
     }
 
-    const expectedNonce = await this.getAccountNonce(tx.getSenderAddress());
+    const expectedNonce = await this.getAccountNonce(
+      tx.getSenderAddress(),
+      null
+    );
     const actualNonce = new BN(tx.nonce);
     if (!expectedNonce.eq(actualNonce)) {
       throw new InvalidInputError(
